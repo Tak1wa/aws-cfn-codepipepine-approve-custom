@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: ---
+Metadata: 
+
+Parameters: 
+
+Resources: 
+  #SNS1
+  snsTopicPipeline:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: hoge-sns-topic-pipeline
+      Subscription: !Ref snsSubscriptionLambda
+      TopicName: hoge-sns-topic-pipeline
+  snsSubscriptionLambda:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      Endpoint: !Ref lambdaFunction
+
+  #Lambda
+  lambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: 
+      FunctionName: 
+      Handler: 
+      KmsKeyArn: 
+      MemorySize: 128
+      Role: role-arn
+      Runtime: python3.8
+      Timeout: 
+      VpcConfig:
+        SecurityGroupIds:
+          - sg-id
+        SubnetIds:
+          - subnet-id
+      Environment:
+        Variables:
+          key1: value1 # A map of key-value pairs that the Lambda function can access
+      Code:
+        S3Bucket: 
+        S3Key: 
+        S3ObjectVersion: 
+        ZipFile: 
+      Tags:
+        - Key: keyname
+          Value: value
+  lambdaExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path:
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: 
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub {AWS:hogeLambdaSnsAllow"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+                - 
+                  Effect: "Allow"
+                  Action: "*"
+                  Resource: "*"
+
+  #SNS
+
+Outputs:
+  #SNS Topic
