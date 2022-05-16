@@ -1,55 +1,56 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: ---
-Metadata: 
-
-Parameters: 
-
+Parameters:
+  PipelineArn:
+    Type: String
+    Description: ex)arn:aws:codepipeline:ap-northeast-1:123456789012:hoge-pipeline
 Resources: 
   #SNS1
   snsTopicPipeline:
     Type: AWS::SNS::Topic
     Properties:
-      DisplayName: hoge-sns-topic-pipeline
-      Subscription: !Ref snsSubscriptionLambda
-      TopicName: hoge-sns-topic-pipeline
-  snsSubscriptionLambda:
-    Type: AWS::SNS::Subscription
-    Properties:
-      Protocol: lambda
-      Endpoint: !Ref lambdaFunction
+      DisplayName: !Sub ${AWS::StackName}-PipelineTrigger-Topic
+      TopicName: !Sub ${AWS::StackName}-PipelineTrigger-Topic
+      Subscription: 
+        - Protocol: lambda
+          Endpoint: !GetAtt SendNotifyFunction.Arn
 
-  #Lambda
-  lambdaFunction:
+  #Lambda1
+  SendNotifyFunction:
     Type: AWS::Lambda::Function
     Properties:
-      Description: 
-      FunctionName: 
-      Handler: 
-      KmsKeyArn: 
-      MemorySize: 128
-      Role: role-arn
-      Runtime: python3.8
-      Timeout: 
-      VpcConfig:
-        SecurityGroupIds:
-          - sg-id
-        SubnetIds:
-          - subnet-id
-      Environment:
-        Variables:
-          key1: value1 # A map of key-value pairs that the Lambda function can access
+      FunctionName: !Sub ${AWS::StackName}-SendNotify-Function
+      Description: !Sub ${AWS::StackName}-SendNotify-Function
       Code:
-        S3Bucket: 
-        S3Key: 
-        S3ObjectVersion: 
-        ZipFile: 
-      Tags:
-        - Key: keyname
-          Value: value
-  lambdaExecRole:
+        ZipFile: !Sub
+        - |
+          import json
+          import boto3
+          def handler(event, context):
+            client = boto3.client('sns')
+            for record in event['Records']:
+              codePipelineMessage = json.loads(record['Sns']['Message'])
+              pipelineName = codePipelineMessage['approval']['pipelineName']
+              stageName = codePipelineMessage['approval']['stageName']
+              actionName = codePipelineMessage['approval']['actionName']
+              token = codePipelineMessage['approval']['token']
+              url = '${approval_url}' + '?pipelinename=' + pipelineName + '&stagename=' + stageName + '&actionname=' + actionName + '&token=' + token + '&action='
+              request = {
+                'TopicArn': '${dest_topic_arn}',
+                'Message': 
+                  '承認\n' + url + 'approve\n' + '拒否\n' + url + 'deny\n',
+                'Subject': 'hoge'
+              }
+              client.publish(**request)
+        - { dest_topic_arn: !Ref snsTopicNotify, approval_url: !GetAtt ApprovalUrl.FunctionUrl }
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt SendNotifyFunctionExecRole.Arn
+      Runtime: python3.8
+      Timeout: 10
+  SendNotifyFunctionExecRole:
     Type: AWS::IAM::Role
     Properties:
-      Path:
       AssumeRolePolicyDocument: 
         Version: 2012-10-17
         Statement:
@@ -57,17 +58,98 @@ Resources:
             Principal: 
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: !Sub {AWS:hogeLambdaSnsAllow"
+        - PolicyName: !Sub ${AWS::StackName}-hogeLambdaSnsAllow
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-                - 
-                  Effect: "Allow"
-                  Action: "*"
-                  Resource: "*"
+                - Effect: "Allow"
+                  Action: "sns:Publish"
+                  Resource: !Ref snsTopicNotify
+  SendNotifyFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt SendNotifyFunction.Arn
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref snsTopicPipeline
 
-  #SNS
+  #SNS2
+  snsTopicNotify:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub ${AWS::StackName}-SendEmail-Topic
+      TopicName: !Sub ${AWS::StackName}-SendEmail-Topic
+
+  #Lambda2
+  ApprovalUrl:
+    Type: AWS::Lambda::Url
+    Properties: 
+      AuthType: NONE
+      TargetFunctionArn: !GetAtt ApprovalFunction.Arn
+  ApprovalFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-Approval-Function
+      Description: !Sub ${AWS::StackName}-Approval-Function
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          def handler(event, context):
+            client = boto3.client('codepipeline')
+            hoge = 'Approved' if event['queryStringParameters']['action'] == 'approve' else 'Rejected'
+            client.put_approval_result(
+              pipelineName=event['queryStringParameters']['pipelinename'],
+              stageName=event['queryStringParameters']['stagename'],
+              actionName=event['queryStringParameters']['actionname'],
+              result={
+                'summary':'',
+                'status': hoge
+              },
+              token=event['queryStringParameters']['token']
+            )
+            return hoge
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt ApprovalFunctionExecRole.Arn
+      Runtime: python3.8
+      Timeout: 10
+  ApprovalFunctionExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument: 
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: 
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-ApprovalFunction
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+                - Effect: "Allow"
+                  Action: "codepipeline:PutApprovalResult"
+                  Resource: 
+                    - Fn::Join:
+                      - ""
+                      - - !Ref PipelineArn 
+                        - "/*/*"
+  ApprovalFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !GetAtt ApprovalFunction.Arn
+      Principal: '*'
+      FunctionUrlAuthType: NONE
 
 Outputs:
   #SNS Topic
+  snsTopicNotify:
+    Value: !Ref snsTopicNotify
